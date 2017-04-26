@@ -9,6 +9,8 @@ import base64
 from time import sleep
 from threading import Thread
 
+CONST_BYTE_SIZE = 8 # Mack 4/26: Added byte size. Not sure if msg_raw[0] means first byte of msg_raw, or first bit of it. Only used it in my contributions so far before we can talk about it.
+
 class Conversation:
     '''
     Represents a conversation between participants
@@ -164,19 +166,20 @@ class Conversation:
 
 
     def process_message_type(self, msg_raw, outgoing = True):
-        type_byte = msg_raw[0]
-        if type_byte == '0':
+        type_byte = msg_raw[0] # TODO: With current message format on Design Phase document this will not get the message type for key exchange and standard messages. We should consider changing the message format so type is in index 0.
+	
+        if type_byte == '0': # For set up messages
             if outgoing:
                 outgoing_setup_message(msg_raw)
             else:
                 incoming_setup_message(msg_raw)
-        else if type_byte == '1':
+        else if type_byte == '1': # For key exchange messages
                 incoming_key_exchange(msg_raw)
-        else if type_byte == '2':
+        else if type_byte == '2': # For normal messages
             if outgoing:
-                outgoing_encrypted_message()
+                outgoing_encrypted_message(msg_raw)
             else:
-                incoming_encrypted_message()
+                incoming_encrypted_message(msg_raw)
         else:
             return
 
@@ -206,10 +209,28 @@ class Conversation:
         self.manager.post_message_to_conversation(nounce + pubenc + usersig)
 
 
-    def outgoing_encrypted_message():
+    def outgoing_encrypted_message(msg_raw): # MACK 4/26: Added parameters here. Wasn't sure if msg_raw was left out on purpose.
         key = b'0123456789abcdef0123456789abcdef'
 
         # TODO: nounce|ctr
+	
+	# TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
+	if (len(msg_raw) < CONST_BYTE_SIZE * 43):
+	    return 
+	
+	# ---- Header ----- # 11 Bytes
+	version = msg_raw[:CONST_BYTE_SIZE * 2]
+	typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
+	length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
+	sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
+	id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
+	
+	# ---- IV/Nonce ----- # 32 Bytes
+	iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
+	nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
+	# TODO: Add these into encode string
+	
+	
         iv = Random.new().read(8)
 
         ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
@@ -222,16 +243,41 @@ class Conversation:
         self.manager.post_message_to_conversation(encoded_msg)
 
     def incoming_setup_message(msg_raw):
+	# TODO: Should these be byte lengths? ie 8 bits long, msg_raw[:8]
         type_byte = msg_raw[0]
         nounce = [1:9]
         user_id = [9:]
         outgoing_key_exchange(nounce, user_id)        
 
-    def incoming_key_exchange():
+    def incoming_key_exchange(msg_raw):
+	version = msg_raw[:CONST_BYTE_SIZE * 2]
+	typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
+	id_num = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
+	nonce = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 21]
+	pub_rsa_key = msg_raw[CONST_BYTE_SIZE * 21:CONST_BYTE_SIZE * 277] # Pub rsa key is 256 bytes long, 2048 bits long
+	sig = msg_raw[CONST_BYTE_SIZE * 277:]
+	# TODO: Need to use these variables to carry out key exchange protocol. 
         pass
 
-    def incoming_encrypted_message():
+    def incoming_encrypted_message(msg_raw):
         key = b'0123456789abcdef0123456789abcdef'
+
+	# TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
+	if (len(msg_raw) < CONST_BYTE_SIZE * 43):
+	    return 
+
+	# ---- Header ----- # 11 Bytes
+	version = msg_raw[:CONST_BYTE_SIZE * 2]
+	typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
+	length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
+	sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
+	id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
+	
+	# ---- IV/Nonce ----- # 32 Bytes
+	iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
+	nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
+	# TODO: Add these into encode string
+
 
         buffer_msg = base64.decodestring(msg_raw)
 
