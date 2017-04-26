@@ -53,6 +53,7 @@ class ChatManager:
             # Send user credentials to the server
             req = urllib2.Request("http://" + SERVER + ":" + SERVER_PORT + "/login", data=user_data)
             r = urllib2.urlopen(req)
+
             headers = r.info().headers
             cookie_found = False
             # Search for the cookie in the response headers

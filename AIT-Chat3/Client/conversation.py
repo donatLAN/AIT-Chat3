@@ -1,3 +1,9 @@
+from Crypto.Cipher import PKCS1_OAEP
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES
+from Crypto.Util import Counter
+from Crypto import Random
+from base64 import b64encode
 from message import Message
 import base64
 from time import sleep
@@ -104,6 +110,16 @@ class Conversation:
         # - list of other users in the converstaion: list_of_users = self.manager.get_other_users()
         # You may need to send some init message from this point of your code
         # you can do that with self.process_outgoing_message("...") or whatever you may want to send here...
+        
+        user_name = self.manager.user_name
+        # set fixed length
+
+        # generate a nonce
+        nounce = Random.new().read(8)
+
+        # COULD BE PROBLEMS
+        self.process_outgoing_message('0' + user_name + nounce,
+            originates_from_console = False)
 
         # Since there is no crypto in the current version, no preparation is needed, so do nothing
         # replace this with anything needed for your key exchange 
@@ -123,13 +139,7 @@ class Conversation:
 
         # process message here
 		# example is base64 decoding, extend this with any crypto processing of your protocol
-        decoded_msg = base64.decodestring(msg_raw)
-
-        # print message and add it to the list of printed messages
-        self.print_message(
-            msg_raw=decoded_msg,
-            owner_str=owner_str
-        )
+        self.process_message_type(msg_raw, outgoing = False)
 
     def process_outgoing_message(self, msg_raw, originates_from_console=False):
         '''
@@ -150,10 +160,122 @@ class Conversation:
 
         # process outgoing message here
 		# example is base64 encoding, extend this with any crypto processing of your protocol
-        encoded_msg = base64.encodestring(msg_raw)
+        self.process_message_type(msg_raw, outgoing = True)
+
+
+    def process_message_type(self, msg_raw, outgoing = True):
+        type_byte = msg_raw[0]
+        if type_byte == '0':
+            if outgoing:
+                outgoing_setup_message(msg_raw)
+            else:
+                incoming_setup_message(msg_raw)
+        else if type_byte == '1':
+                incoming_key_exchange(msg_raw)
+        else if type_byte == '2':
+            if outgoing:
+                outgoing_encrypted_message()
+            else:
+                incoming_encrypted_message()
+        else:
+            return
+
+    def outgoing_setup_message(msg_raw):
+        self.manager.post_message_to_conversation(msg_raw)
+
+    def outgoing_key_exchange(nounce, user_id):
+        kfile = open(user_id + '_public.pem')
+        keystr = kfile.read()
+        kfile.close()
+        pubkey = RSA.importKey(keystr)
+        cipher = PKCS1_OAEP.new(pubkey)
+
+        symkey = b'0123456789abcdef0123456789abcdef'
+
+        pubenc = cipher.encrypt(self.manager.user_name + symkey)
+
+        kfile = open(self.manager.user_name + '_private.pem')
+        keystr = kfile.read()
+        kfile.close()
+        privkey = RSA.importKey(keystr)
+
+        signer = PKCS1_PSS.new(key)
+
+        usersig = base64.encodestring(signer.sign(userid + nounce + pubenc))
+
+        self.manager.post_message_to_conversation(nounce + pubenc + usersig)
+
+
+    def outgoing_encrypted_message():
+        key = b'0123456789abcdef0123456789abcdef'
+
+        # TODO: nounce|ctr
+        iv = Random.new().read(8)
+
+        ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
+        cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
+        cbcmac = self.generate_cbcmac(msg_raw, key)
+
+        encoded_msg = base64.encodestring(iv + cipher.encrypt(msg_raw) + cbcmac)
 
         # post the message to the conversation
         self.manager.post_message_to_conversation(encoded_msg)
+
+    def incoming_setup_message(msg_raw):
+        type_byte = msg_raw[0]
+        nounce = [1:9]
+        user_id = [9:]
+        outgoing_key_exchange(nounce, user_id)        
+
+    def incoming_key_exchange():
+        pass
+
+    def incoming_encrypted_message():
+        key = b'0123456789abcdef0123456789abcdef'
+
+        buffer_msg = base64.decodestring(msg_raw)
+
+        iv = buffer_msg[:8]
+        data = buffer_msg[8:-AES.block_size]
+        cbcmac = buffer_msg[-AES.block_size:]
+
+        ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
+        cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
+        decoded_msg = cipher.decrypt(data)
+
+        derived_mac = self.generate_cbcmac(decoded_msg,key)
+
+        if (cbcmac != derived_mac):
+            print "Verification failed: invalid MAC."
+            return
+
+        # print message and add it to the list of printed messages
+        self.print_message(
+            msg_raw=decoded_msg,
+            owner_str=owner_str
+        )
+
+    def generate_cbcmac(self, msg_raw, key):
+        # pad msg if needed, padding sheme is x01 x00 ... x00
+        plen = AES.block_size - len(msg_raw)%AES.block_size
+        if (plen != AES.block_size):
+            msg_raw += chr(1)
+            if (plen > 1):
+                msg_raw += chr(0)*(plen-1)
+
+        # initialize all 0 iv
+        # TODO make iv nounce|len(header|message)
+        iv = chr(0)*AES.block_size
+
+        # create AES cipher object
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+
+        # compute CBC MAC value
+        emsg = cipher.encrypt(msg_raw)
+        comp_mac = emsg[-AES.block_size:]
+
+        return comp_mac
+
 
     def print_message(self, msg_raw, owner_str):
         '''
