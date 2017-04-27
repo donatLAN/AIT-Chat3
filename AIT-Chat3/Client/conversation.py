@@ -120,12 +120,12 @@ class Conversation:
         nounce = Random.new().read(8)
 
         # COULD BE PROBLEMS
-        self.process_outgoing_message('0' + user_name + nounce,
+        msg_raw = base64.encodestring('0' + user_name + nounce)
+        self.process_outgoing_message(msg_raw,
             originates_from_console = False)
 
         # Since there is no crypto in the current version, no preparation is needed, so do nothing
-        # replace this with anything needed for your key exchange 
-        pass
+        # replace this with anything needed for your key exchange
 
 
     def process_incoming_message(self, msg_raw, msg_id, owner_str):
@@ -141,7 +141,8 @@ class Conversation:
 
         # process message here
 		# example is base64 decoding, extend this with any crypto processing of your protocol
-        self.process_message_type(msg_raw, outgoing = False)
+        buffer_msg = base64.decodestring(msg_raw)
+        self.process_message_type(buffer_msg, outgoing = False)
 
     def process_outgoing_message(self, msg_raw, originates_from_console=False):
         '''
@@ -187,7 +188,7 @@ class Conversation:
         self.manager.post_message_to_conversation(msg_raw)
 
     def outgoing_key_exchange(nounce, user_id):
-        kfile = open(user_id + '_public.pem')
+        kfile = open(user_id + 'public_key.pem')
         keystr = kfile.read()
         kfile.close()
         pubkey = RSA.importKey(keystr)
@@ -197,7 +198,7 @@ class Conversation:
 
         pubenc = cipher.encrypt(self.manager.user_name + symkey)
 
-        kfile = open(self.manager.user_name + '_private.pem')
+        kfile = open(self.manager.user_name + '/private_key.pem')
         keystr = kfile.read()
         kfile.close()
         privkey = RSA.importKey(keystr)
@@ -231,7 +232,7 @@ class Conversation:
 	# TODO: Add these into encode string
 	
 	
-        iv = Random.new().read(8)
+        iv = Random.new().read(8) #crypto random
 
         ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
@@ -259,7 +260,7 @@ class Conversation:
 	# TODO: Need to use these variables to carry out key exchange protocol. 
         pass
 
-    def incoming_encrypted_message(msg_raw):
+    def incoming_encrypted_message(buffer_msg):
         key = b'0123456789abcdef0123456789abcdef'
 
 	# TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
@@ -279,7 +280,7 @@ class Conversation:
 	# TODO: Add these into encode string
 
 
-        buffer_msg = base64.decodestring(msg_raw)
+        #buffer_msg = base64.decodestring(msg_raw)
 
         iv = buffer_msg[:8]
         data = buffer_msg[8:-AES.block_size]
