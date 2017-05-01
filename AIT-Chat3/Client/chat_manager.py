@@ -4,6 +4,7 @@ import json
 from conversation import Conversation
 from message import Message, MessageEncoder
 from time import sleep
+from Crypto.Random import random
 
 from menu import menu
 
@@ -139,6 +140,14 @@ class ChatManager:
             except urllib2.URLError as e:
                 print "Unable to create conversation, reason:", e.message
                 return
+            new_conversation_id = self.get_new_conversation_id()
+            if new_conversation_id == -1:
+                return
+            symkey = format(random.getrandbits(128), 'x')
+            data = { new_conversation_id: {"key": symkey }}
+            with open("users/" + self.user_name + "/keychain.txt", "a") as jsonfile:
+                json.dump(data, jsonfile)
+                f.write("\n")
             print "Conversation created"
         else:
             print "Please log in before creating new conversations"
@@ -180,7 +189,6 @@ class ChatManager:
             print "Please log in before accessing Your conversations"
             state = INIT
         
-
     def get_my_conversations(self):
         '''
         Retrieves all the conversations (their IDs and participant lists) that the current user is a participant of
@@ -211,6 +219,34 @@ class ChatManager:
         else:
             print "Please log in before accessing Your conversations"
             state = INIT
+
+    def get_new_conversation_id(self):
+        '''
+        Retrieves all the conversations (their IDs and participant lists) that the current user is a participant of
+        :return: None
+        '''
+        global state
+        # Allowed only, if user is logged in
+        if self.is_logged_in:
+            try:
+                # Querying the server for the conversations of the current user (user is a participant)
+                req = urllib2.Request("http://" + SERVER + ":" + SERVER_PORT + "/conversations")
+                # Include Cookie
+                req.add_header("Cookie", self.cookie)
+                r = urllib2.urlopen(req)
+            except urllib2.HTTPError as e:
+                print "Unable to download conversations, server returned HTTP", e.code, e.msg
+                return -1
+            except urllib2.URLError as e:
+                print "Unable to download conversations, reason:", e.message
+                return -1
+            conversations = json.loads(r.read())
+            conversation_id = conversations[-1]["conversation_id"]
+            return conversation_id
+        else:
+            print "Please log in before accessing Your conversations"
+            state = INIT
+            return -1
 
     def get_messages_of_conversation(self):
         '''

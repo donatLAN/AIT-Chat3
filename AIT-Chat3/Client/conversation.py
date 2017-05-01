@@ -1,15 +1,17 @@
 from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Signature import PKCS1_PSS
+from Crypto.Hash import SHA
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 from Crypto import Random
-from Crypto.Random import random
 from base64 import b64encode
 from message import Message
 import base64
 from time import sleep
 from threading import Thread
 import json
+import hashlib
 
 class Conversation:
     '''
@@ -30,15 +32,6 @@ class Conversation:
         assert isinstance(manager, ChatManager)
         self.manager = manager # chat manager for sending messages
         self.run_infinite_loop = True
-
-        # # generate and add sym key here
-        # print "user_name:", self.manager.user_name
-        # symkey = random.getrandbits(128)
-        # print "key:", symkey
-        # data = { self.id: {
-        # "key": symkey }
-        # with open("users/" + self.manager.user_name + "/keychain.txt", "a") as f:
-        #     json.dump(data, f)
 
         self.msg_process_loop = Thread(
             target=self.process_all_messages
@@ -123,20 +116,11 @@ class Conversation:
         # You may need to send some init message from this point of your code
         # you can do that with self.process_outgoing_message("...") or whatever you may want to send here...
         
-        # user_name = self.manager.user_name
-        # # set fixed length
+        user_id = self.manager.user_name
+        nounce = Random.new().read(8)
 
-        # # generate a nonce
-        # nounce = Random.new().read(8)
-
-        # # COULD BE PROBLEMS
-        # msg_raw = base64.encodestring('0' + user_name + nounce)
-        # buffer_msg = base64.encodestring(msg_raw)
-        # self.manager.post_message_to_conversation(buffer_msg)
-
-        # Since there is no crypto in the current version, no preparation is needed, so do nothing
-        # replace this with anything needed for your key exchange
-        pass
+        msg_raw = base64.encodestring('0' + nounce + user_id)
+        self.manager.post_message_to_conversation(msg_raw)
 
     def process_incoming_message(self, msg_raw, msg_id, owner_str):
         '''
@@ -186,35 +170,56 @@ class Conversation:
         self.outgoing_encrypted_message(msg_raw)
 
     def outgoing_key_exchange(self, nounce, user_id):
-        kfile = open(user_id + '/public_key.pem')
+
+        # get requester's public key
+        kfile = open('users/' + user_id + '/public_key.pem')
         keystr = kfile.read()
         kfile.close()
         pubkey = RSA.importKey(keystr)
         cipher = PKCS1_OAEP.new(pubkey)
 
-        symkey = b'0123456789abcdef0123456789abcdef'
-
+        # get the symetric key and publicly encrypt
+        c_id = self.id
+        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
+        if c_id not in data:
+            return
+        symkey = data[c_id]['key']
+        # with open('users/' + self.manager.user_name + '/keychain.txt') as jsonfile:
+        #     data = json.load(jsonfile)
+        #     if c_id not in data:
+        #         return
+        #     symkey = data[c_id]['key']
         pubenc = cipher.encrypt(self.manager.user_name + symkey)
 
-        kfile = open(self.manager.user_name + '/private_key.pem')
+        # prepare header
+        ad = '1' + self.manager.user_name + nounce
+        header = ad + len(ad + pubenc)
+
+        h = SHA.new()
+        h.update(header + pubenc)
+
+        # retrieve private key
+        kfile = open('users/' + self.manager.user_name + '/private_key.pem')
         keystr = kfile.read()
         kfile.close()
         privkey = RSA.importKey(keystr)
 
-        signer = PKCS1_PSS.new(key)
+        # sign package
+        signer = PKCS1_PSS.new(privkey)
+        user_sig = signer.sign(h)
 
-        usersig = base64.encodestring(signer.sign(userid + nounce + pubenc))
+        msg_raw = base64.encodestring(header + pubenc + user_sig)
+        self.manager.post_message_to_conversation(msg_raw)
 
-        self.manager.post_message_to_conversation(nounce + pubenc + usersig)
-
-    def outgoing_encrypted_message(self, msg_raw): # MACK 4/26: Added parameters here. Wasn't sure if msg_raw was left out on purpose.
-        key = b'0123456789abcdef0123456789abcdef'
+    def outgoing_encrypted_message(self, msg_raw):
+        c_id = self.id
+        
+        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
+        if c_id not in data:
+            return
+        key = data[c_id]['key']
 
         # TODO: nounce|ctr
-	
-	# TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
-	# if (len(msg_raw) < CONST_BYTE_SIZE * 43):
-	#     return 
 	
 	# # ---- Header ----- # 11 Bytes
 	# version = msg_raw[:CONST_BYTE_SIZE * 2]
@@ -241,28 +246,56 @@ class Conversation:
         self.manager.post_message_to_conversation(encoded_msg)
 
     def incoming_setup_message(self, msg_raw):
-	# TODO: Should these be byte lengths? ie 8 bits long, msg_raw[:8]
         type_byte = msg_raw[0]
         nounce = msg_raw[1:9]
         user_id = msg_raw[9:]
         self.outgoing_key_exchange(nounce, user_id)        
 
     def incoming_key_exchange(self, msg_raw):
-	# version = msg_raw[:CONST_BYTE_SIZE * 2]
-	# typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
-	# id_num = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
-	# nonce = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 21]
-	# pub_rsa_key = msg_raw[CONST_BYTE_SIZE * 21:CONST_BYTE_SIZE * 277] # Pub rsa key is 256 bytes long, 2048 bits long
-	# sig = msg_raw[CONST_BYTE_SIZE * 277:]
-	# TODO: Need to use these variables to carry out key exchange protocol. 
-        pass
+        user_id = msg_raw[1:9]
+        nounce = msg_raw[9:19]
+        msg_length = int(msg_raw[19:21])
+        data = msg_raw[21:msg_length]
+        signature = msg_raw[msg_length:]
+
+        # need to check nounces for freshness
+
+        h = SHA.new()
+        h.update(msg_raw[:msg_length])
+
+        # get public key to verify
+        kfile = open('users/' + user_id + '/public_key.pem')
+        keystr = kfile.read()
+        kfile.close()
+        pubkey = RSA.importKey(keystr)
+        verifier = PKCS1_PSS.new(pubkey)
+
+        if not verifier.verify(h, signature):
+            return
+
+        # retrieve private key
+        kfile = open('users/' + self.manager.user_name + '/private_key.pem')
+        keystr = kfile.read()
+        kfile.close()
+        privkey = RSA.importKey(keystr)
+        cipher = PKCS1_OAEP.new(privkey)
+        
+        decrypt_data = cipher.decrypt(data)
+        symkey = decrypt_data[len(user_id):]
+
+        # write the key in the keychain
+        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
+        if c_id not in data:
+            new_data = { new_conversation_id: {"key": symkey }}
+            with open("users/" + self.user_name + "/keychain.txt", "a") as jsonfile:
+                json.dump(new_data, jsonfile)
+                f.write("\n")
 
     def incoming_encrypted_message(self, buffer_msg, owner_str):
-        key = b'0123456789abcdef0123456789abcdef'
-
-	# # TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
-	# if (len(msg_raw) < CONST_BYTE_SIZE * 43):
-	#     return 
+        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
+        if c_id not in data:
+            return
+        key = data[c_id]['key']
 
 	# # ---- Header ----- # 11 Bytes
 	# version = msg_raw[:CONST_BYTE_SIZE * 2]
