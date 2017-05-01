@@ -3,13 +3,13 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 from Crypto import Random
+from Crypto.Random import random
 from base64 import b64encode
 from message import Message
 import base64
 from time import sleep
 from threading import Thread
-
-CONST_BYTE_SIZE = 8 # Mack 4/26: Added byte size. Not sure if msg_raw[0] means first byte of msg_raw, or first bit of it. Only used it in my contributions so far before we can talk about it.
+import json
 
 class Conversation:
     '''
@@ -30,6 +30,16 @@ class Conversation:
         assert isinstance(manager, ChatManager)
         self.manager = manager # chat manager for sending messages
         self.run_infinite_loop = True
+
+        # # generate and add sym key here
+        # print "user_name:", self.manager.user_name
+        # symkey = random.getrandbits(128)
+        # print "key:", symkey
+        # data = { self.id: {
+        # "key": symkey }
+        # with open("users/" + self.manager.user_name + "/keychain.txt", "a") as f:
+        #     json.dump(data, f)
+
         self.msg_process_loop = Thread(
             target=self.process_all_messages
         ) # message processing loop
@@ -113,20 +123,20 @@ class Conversation:
         # You may need to send some init message from this point of your code
         # you can do that with self.process_outgoing_message("...") or whatever you may want to send here...
         
-        user_name = self.manager.user_name
-        # set fixed length
+        # user_name = self.manager.user_name
+        # # set fixed length
 
-        # generate a nonce
-        nounce = Random.new().read(8)
+        # # generate a nonce
+        # nounce = Random.new().read(8)
 
-        # COULD BE PROBLEMS
-        msg_raw = base64.encodestring('0' + user_name + nounce)
-        self.process_outgoing_message(msg_raw,
-            originates_from_console = False)
+        # # COULD BE PROBLEMS
+        # msg_raw = base64.encodestring('0' + user_name + nounce)
+        # buffer_msg = base64.encodestring(msg_raw)
+        # self.manager.post_message_to_conversation(buffer_msg)
 
         # Since there is no crypto in the current version, no preparation is needed, so do nothing
         # replace this with anything needed for your key exchange
-
+        pass
 
     def process_incoming_message(self, msg_raw, msg_id, owner_str):
         '''
@@ -142,7 +152,17 @@ class Conversation:
         # process message here
 		# example is base64 decoding, extend this with any crypto processing of your protocol
         buffer_msg = base64.decodestring(msg_raw)
-        self.process_message_type(buffer_msg, outgoing = False)
+
+        type_byte = buffer_msg[0]
+        if type_byte == '0':
+            self.incoming_setup_message(buffer_msg)
+        elif type_byte == '1':
+            self.incoming_key_exchange(buffer_msg)
+        elif type_byte == '2':
+            self.incoming_encrypted_message(buffer_msg, owner_str)
+
+        else:
+            return
 
     def process_outgoing_message(self, msg_raw, originates_from_console=False):
         '''
@@ -163,32 +183,10 @@ class Conversation:
 
         # process outgoing message here
 		# example is base64 encoding, extend this with any crypto processing of your protocol
-        self.process_message_type(msg_raw, outgoing = True)
+        self.outgoing_encrypted_message(msg_raw)
 
-
-    def process_message_type(self, msg_raw, outgoing = True):
-        type_byte = msg_raw[0] # TODO: With current message format on Design Phase document this will not get the message type for key exchange and standard messages. We should consider changing the message format so type is in index 0.
-	
-        if type_byte == '0': # For set up messages
-            if outgoing:
-                outgoing_setup_message(msg_raw)
-            else:
-                incoming_setup_message(msg_raw)
-        else if type_byte == '1': # For key exchange messages
-                incoming_key_exchange(msg_raw)
-        else if type_byte == '2': # For normal messages
-            if outgoing:
-                outgoing_encrypted_message(msg_raw)
-            else:
-                incoming_encrypted_message(msg_raw)
-        else:
-            return
-
-    def outgoing_setup_message(msg_raw):
-        self.manager.post_message_to_conversation(msg_raw)
-
-    def outgoing_key_exchange(nounce, user_id):
-        kfile = open(user_id + 'public_key.pem')
+    def outgoing_key_exchange(self, nounce, user_id):
+        kfile = open(user_id + '/public_key.pem')
         keystr = kfile.read()
         kfile.close()
         pubkey = RSA.importKey(keystr)
@@ -209,91 +207,87 @@ class Conversation:
 
         self.manager.post_message_to_conversation(nounce + pubenc + usersig)
 
-
-    def outgoing_encrypted_message(msg_raw): # MACK 4/26: Added parameters here. Wasn't sure if msg_raw was left out on purpose.
+    def outgoing_encrypted_message(self, msg_raw): # MACK 4/26: Added parameters here. Wasn't sure if msg_raw was left out on purpose.
         key = b'0123456789abcdef0123456789abcdef'
 
         # TODO: nounce|ctr
 	
 	# TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
-	if (len(msg_raw) < CONST_BYTE_SIZE * 43):
-	    return 
+	# if (len(msg_raw) < CONST_BYTE_SIZE * 43):
+	#     return 
 	
-	# ---- Header ----- # 11 Bytes
-	version = msg_raw[:CONST_BYTE_SIZE * 2]
-	typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
-	length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
-	sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
-	id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
+	# # ---- Header ----- # 11 Bytes
+	# version = msg_raw[:CONST_BYTE_SIZE * 2]
+	# typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
+	# length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
+	# sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
+	# id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
 	
-	# ---- IV/Nonce ----- # 32 Bytes
-	iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
-	nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
+	# # ---- IV/Nonce ----- # 32 Bytes
+	# iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
+	# nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
 	# TODO: Add these into encode string
-	
-	
+        type_byte = '2'
         iv = Random.new().read(8) #crypto random
+        header = type_byte + iv
 
         ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
-        cbcmac = self.generate_cbcmac(msg_raw, key)
+        cbcmac = self.generate_cbcmac(header + msg_raw, key)
 
-        encoded_msg = base64.encodestring(iv + cipher.encrypt(msg_raw) + cbcmac)
+        encoded_msg = base64.encodestring(header + cipher.encrypt(msg_raw) + cbcmac)
 
         # post the message to the conversation
         self.manager.post_message_to_conversation(encoded_msg)
 
-    def incoming_setup_message(msg_raw):
+    def incoming_setup_message(self, msg_raw):
 	# TODO: Should these be byte lengths? ie 8 bits long, msg_raw[:8]
         type_byte = msg_raw[0]
-        nounce = [1:9]
-        user_id = [9:]
-        outgoing_key_exchange(nounce, user_id)        
+        nounce = msg_raw[1:9]
+        user_id = msg_raw[9:]
+        self.outgoing_key_exchange(nounce, user_id)        
 
-    def incoming_key_exchange(msg_raw):
-	version = msg_raw[:CONST_BYTE_SIZE * 2]
-	typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
-	id_num = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
-	nonce = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 21]
-	pub_rsa_key = msg_raw[CONST_BYTE_SIZE * 21:CONST_BYTE_SIZE * 277] # Pub rsa key is 256 bytes long, 2048 bits long
-	sig = msg_raw[CONST_BYTE_SIZE * 277:]
+    def incoming_key_exchange(self, msg_raw):
+	# version = msg_raw[:CONST_BYTE_SIZE * 2]
+	# typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
+	# id_num = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
+	# nonce = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 21]
+	# pub_rsa_key = msg_raw[CONST_BYTE_SIZE * 21:CONST_BYTE_SIZE * 277] # Pub rsa key is 256 bytes long, 2048 bits long
+	# sig = msg_raw[CONST_BYTE_SIZE * 277:]
 	# TODO: Need to use these variables to carry out key exchange protocol. 
         pass
 
-    def incoming_encrypted_message(buffer_msg):
+    def incoming_encrypted_message(self, buffer_msg, owner_str):
         key = b'0123456789abcdef0123456789abcdef'
 
-	# TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
-	if (len(msg_raw) < CONST_BYTE_SIZE * 43):
-	    return 
+	# # TODO: Add a better check for proper length of msg_raw. Currently only checks that header, iv and nonce fields are filled
+	# if (len(msg_raw) < CONST_BYTE_SIZE * 43):
+	#     return 
 
-	# ---- Header ----- # 11 Bytes
-	version = msg_raw[:CONST_BYTE_SIZE * 2]
-	typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
-	length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
-	sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
-	id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
+	# # ---- Header ----- # 11 Bytes
+	# version = msg_raw[:CONST_BYTE_SIZE * 2]
+	# typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
+	# length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
+	# sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
+	# id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
 	
-	# ---- IV/Nonce ----- # 32 Bytes
-	iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
-	nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
+	# # ---- IV/Nonce ----- # 32 Bytes
+	# iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
+	# nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
 	# TODO: Add these into encode string
+        header = buffer_msg[:9]
 
-
-        #buffer_msg = base64.decodestring(msg_raw)
-
-        iv = buffer_msg[:8]
-        data = buffer_msg[8:-AES.block_size]
+        iv = buffer_msg[1:9]
+        data = buffer_msg[9:-AES.block_size]
         cbcmac = buffer_msg[-AES.block_size:]
 
         ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
         decoded_msg = cipher.decrypt(data)
 
-        derived_mac = self.generate_cbcmac(decoded_msg,key)
+        derived_mac = self.generate_cbcmac(header + decoded_msg, key)
 
         if (cbcmac != derived_mac):
-            print "Verification failed: invalid MAC."
             return
 
         # print message and add it to the list of printed messages

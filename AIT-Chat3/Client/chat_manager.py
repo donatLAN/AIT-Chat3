@@ -53,7 +53,6 @@ class ChatManager:
             # Send user credentials to the server
             req = urllib2.Request("http://" + SERVER + ":" + SERVER_PORT + "/login", data=user_data)
             r = urllib2.urlopen(req)
-
             headers = r.info().headers
             cookie_found = False
             # Search for the cookie in the response headers
@@ -321,6 +320,7 @@ class ChatManager:
                     state = INIT
                 elif state == SELECT_CONVERSATION:
                     # User wants to enter a conversation
+                    c_id = None
                     try:
                         # Read the conversation ID supplied by the user
                         conversation_id = raw_input("Which conversation do you wish to join? ")
@@ -335,8 +335,6 @@ class ChatManager:
                         except ValueError as e:
                             print "Entered conversation ID is not a number"
                             continue
-                        self.current_conversation = Conversation(c_id, self)
-                        self.current_conversation.setup_conversation()
                     except urllib2.HTTPError as e:
                         print "Unable to determine validity of conversation ID, server returned HTTP", e.code, e.msg
                         continue
@@ -349,7 +347,9 @@ class ChatManager:
                     except KeyboardInterrupt:
                         continue
                     # Enter the conversation (message retrieval thread becomes active)
+                    self.current_conversation = Conversation(c_id, self)
                     state = IN_CONVERSATION
+                    self.current_conversation.setup_conversation()
                     # Read messages from the console
                     self.read_user_input()
                 elif state == STOP:
