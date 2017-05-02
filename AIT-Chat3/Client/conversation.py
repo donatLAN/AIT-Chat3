@@ -28,6 +28,7 @@ class Conversation:
         self.all_messages = []  # all retrieved messages of the conversation
         self.printed_messages = []
         self.last_processed_msg_id = 0  # ID of the last processed message
+        self.key_nounce = 0 # holder for the nounce of the setup message
         from chat_manager import ChatManager
         assert isinstance(manager, ChatManager)
         self.manager = manager # chat manager for sending messages
@@ -117,9 +118,11 @@ class Conversation:
         # you can do that with self.process_outgoing_message("...") or whatever you may want to send here...
         
         user_id = self.manager.user_name
+        pad_user_id = "{:<8}".format(user_id)
         nounce = Random.new().read(8)
+        self.key_nounce = nounce
 
-        msg_raw = base64.encodestring('0' + nounce + user_id)
+        msg_raw = base64.encodestring('0' + nounce + pad_user_id)
         self.manager.post_message_to_conversation(msg_raw)
 
     def process_incoming_message(self, msg_raw, msg_id, owner_str):
@@ -169,7 +172,8 @@ class Conversation:
 		# example is base64 encoding, extend this with any crypto processing of your protocol
         self.outgoing_encrypted_message(msg_raw)
 
-    def outgoing_key_exchange(self, nounce, user_id):
+    def outgoing_key_exchange(self, nounce, pad_user_id):
+        user_id = pad_user_id.strip()
 
         # get requester's public key
         kfile = open('users/' + user_id + '/public_key.pem')
@@ -179,21 +183,16 @@ class Conversation:
         cipher = PKCS1_OAEP.new(pubkey)
 
         # get the symetric key and publicly encrypt
-        c_id = self.id
-        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
-        if c_id not in data:
+        symkey = self.get_symetric_key()
+        if symkey == -1:
             return
-        symkey = data[c_id]['key']
-        # with open('users/' + self.manager.user_name + '/keychain.txt') as jsonfile:
-        #     data = json.load(jsonfile)
-        #     if c_id not in data:
-        #         return
-        #     symkey = data[c_id]['key']
-        pubenc = cipher.encrypt(self.manager.user_name + symkey)
+        pad_current_user = "{:<8}".format(self.manager.user_name)
+        pubenc = cipher.encrypt(pad_current_user + symkey)
 
         # prepare header
-        ad = '1' + self.manager.user_name + nounce
-        header = ad + len(ad + pubenc)
+        ad = '1' + pad_current_user + nounce
+        data_length = str(len(ad + pubenc) + 8).zfill(8)
+        header = ad + data_length
 
         h = SHA.new()
         h.update(header + pubenc)
@@ -212,28 +211,13 @@ class Conversation:
         self.manager.post_message_to_conversation(msg_raw)
 
     def outgoing_encrypted_message(self, msg_raw):
-        c_id = self.id
         
-        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
-        if c_id not in data:
+        key = self.get_symetric_key()
+        if key == -1:
             return
-        key = data[c_id]['key']
 
-        # TODO: nounce|ctr
-	
-	# # ---- Header ----- # 11 Bytes
-	# version = msg_raw[:CONST_BYTE_SIZE * 2]
-	# typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
-	# length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
-	# sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
-	# id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
-	
-	# # ---- IV/Nonce ----- # 32 Bytes
-	# iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
-	# nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
-	# TODO: Add these into encode string
         type_byte = '2'
-        iv = Random.new().read(8) #crypto random
+        iv = Random.new().read(8)
         header = type_byte + iv
 
         ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
@@ -241,24 +225,30 @@ class Conversation:
         cbcmac = self.generate_cbcmac(header + msg_raw, key)
 
         encoded_msg = base64.encodestring(header + cipher.encrypt(msg_raw) + cbcmac)
-
-        # post the message to the conversation
         self.manager.post_message_to_conversation(encoded_msg)
 
     def incoming_setup_message(self, msg_raw):
         type_byte = msg_raw[0]
         nounce = msg_raw[1:9]
-        user_id = msg_raw[9:]
-        self.outgoing_key_exchange(nounce, user_id)        
+        pad_user_id = msg_raw[9:]
+        self.outgoing_key_exchange(nounce, pad_user_id)        
 
     def incoming_key_exchange(self, msg_raw):
-        user_id = msg_raw[1:9]
-        nounce = msg_raw[9:19]
-        msg_length = int(msg_raw[19:21])
-        data = msg_raw[21:msg_length]
+        # process header
+        pad_user_id = msg_raw[1:9]
+        user_id = pad_user_id.strip()
+
+        nounce = msg_raw[9:17]
+        pad_msg_length = msg_raw[17:25]
+
+        msg_length = int(pad_msg_length)
+        data = msg_raw[25:msg_length]
         signature = msg_raw[msg_length:]
 
         # need to check nounces for freshness
+        if nounce != self.nounce:
+            print "key is not fresh"
+            return
 
         h = SHA.new()
         h.update(msg_raw[:msg_length])
@@ -271,6 +261,7 @@ class Conversation:
         verifier = PKCS1_PSS.new(pubkey)
 
         if not verifier.verify(h, signature):
+            print "public signature verification failed"
             return
 
         # retrieve private key
@@ -281,35 +272,18 @@ class Conversation:
         cipher = PKCS1_OAEP.new(privkey)
         
         decrypt_data = cipher.decrypt(data)
-        symkey = decrypt_data[len(user_id):]
+        symkey = decrypt_data[8:] # ignore user_id
 
         # write the key in the keychain
-        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
-        if c_id not in data:
-            new_data = { new_conversation_id: {"key": symkey }}
-            with open("users/" + self.user_name + "/keychain.txt", "a") as jsonfile:
-                json.dump(new_data, jsonfile)
-                f.write("\n")
+        self.manager.write_new_key(self.id)
 
     def incoming_encrypted_message(self, buffer_msg, owner_str):
-        data = json.load(open('users/' + self.manager.user_name + '/keychain.txt'))
-        if c_id not in data:
+        
+        key = self.get_symetric_key()
+        if key == -1:
             return
-        key = data[c_id]['key']
 
-	# # ---- Header ----- # 11 Bytes
-	# version = msg_raw[:CONST_BYTE_SIZE * 2]
-	# typ = msg_raw[CONST_BYTE_SIZE * 2:CONST_BYTE_SIZE * 3]
-	# length = msg_raw[CONST_BYTE_SIZE * 3:CONST_BYTE_SIZE * 5]
-	# sqn = msg_raw[CONST_BYTE_SIZE * 5:CONST_BYTE_SIZE * 9]
-	# id_num = msg_raw[CONST_BYTE_SIZE * 9:CONST_BYTE_SIZE * 11]
-	
-	# # ---- IV/Nonce ----- # 32 Bytes
-	# iv = msg_raw[CONST_BYTE_SIZE * 11:CONST_BYTE_SIZE * 27]
-	# nonce = msg_raw[CONST_BYTE_SIZE * 27:CONST_BYTE_SIZE * 43]
-	# TODO: Add these into encode string
         header = buffer_msg[:9]
-
         iv = buffer_msg[1:9]
         data = buffer_msg[9:-AES.block_size]
         cbcmac = buffer_msg[-AES.block_size:]
@@ -350,6 +324,18 @@ class Conversation:
 
         return comp_mac
 
+    def get_symetric_key(self):
+        with open('users/' + self.manager.user_name + '/keychain.txt', "r") as jsonfile:
+            try:
+                keychain = json.load(jsonfile)
+            except ValueError:
+                keychain = {}
+
+        # if user does not have key yet
+        if self.id not in keychain:
+            return -1
+        else:
+            return keychain[self.id]
 
     def print_message(self, msg_raw, owner_str):
         '''
