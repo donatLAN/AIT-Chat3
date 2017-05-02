@@ -143,25 +143,25 @@ class ChatManager:
             new_conversation_id = self.get_new_conversation_id()
             if new_conversation_id == -1:
                 return
-            self.write_new_key(new_conversation_id)
+            symkey = format(random.getrandbits(128), 'x')
+            self.write_new_key(new_conversation_id, symkey)
             print "Conversation created"
         else:
             print "Please log in before creating new conversations"
             state = INIT
 
-    def write_new_key(self, c_id):
+    def write_new_key(self, c_id, symkey):
         # read exisitng keychain
             with open("users/" + self.user_name + "/keychain.txt", "r") as jsonfile:
                 try:
                     keychain = json.load(jsonfile)
                 except ValueError:
                     keychain = {}
-            # re-initialize keychain
-            with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
-                json.dump({}, jsonfile)
+            # # re-initialize keychain
+            # with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
+            #     json.dump({}, jsonfile)
             # re-write kechain with new key
             with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
-                symkey = format(random.getrandbits(128), 'x')
                 keychain[c_id] = symkey
                 json.dump(keychain, jsonfile)
 

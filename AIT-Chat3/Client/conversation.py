@@ -142,12 +142,18 @@ class Conversation:
 
         type_byte = buffer_msg[0]
         if type_byte == '0':
+            if owner_str == self.manager.user_name:
+                return
+            print "RECIEVEING SETUP MESSAGE: ", owner_str
             self.incoming_setup_message(buffer_msg)
         elif type_byte == '1':
+            if owner_str == self.manager.user_name:
+                return
+            print "RECIEVEING KEY EXCHANGE: ", owner_str
             self.incoming_key_exchange(buffer_msg)
         elif type_byte == '2':
+            print "RECIEVEING ECRYPTED MESSAGE:", owner_str
             self.incoming_encrypted_message(buffer_msg, owner_str)
-
         else:
             return
 
@@ -170,6 +176,7 @@ class Conversation:
 
         # process outgoing message here
 		# example is base64 encoding, extend this with any crypto processing of your protocol
+        print "SENDING OUTGOING MESSAGE"
         self.outgoing_encrypted_message(msg_raw)
 
     def outgoing_key_exchange(self, nounce, pad_user_id):
@@ -185,9 +192,11 @@ class Conversation:
         # get the symetric key and publicly encrypt
         symkey = self.get_symetric_key()
         if symkey == -1:
+            print "does not have symkey"
             return
         pad_current_user = "{:<8}".format(self.manager.user_name)
-        pubenc = cipher.encrypt(pad_current_user + symkey)
+        data = (pad_current_user + symkey).encode('utf-8')
+        pubenc = cipher.encrypt(data)
 
         # prepare header
         ad = '1' + pad_current_user + nounce
@@ -208,6 +217,7 @@ class Conversation:
         user_sig = signer.sign(h)
 
         msg_raw = base64.encodestring(header + pubenc + user_sig)
+        print "PROCESSING KEY EXCHANGE: ", header
         self.manager.post_message_to_conversation(msg_raw)
 
     def outgoing_encrypted_message(self, msg_raw):
@@ -228,8 +238,8 @@ class Conversation:
         self.manager.post_message_to_conversation(encoded_msg)
 
     def incoming_setup_message(self, msg_raw):
-        type_byte = msg_raw[0]
         nounce = msg_raw[1:9]
+        print "recieving", nounce
         pad_user_id = msg_raw[9:]
         self.outgoing_key_exchange(nounce, pad_user_id)        
 
@@ -246,8 +256,8 @@ class Conversation:
         signature = msg_raw[msg_length:]
 
         # need to check nounces for freshness
-        if nounce != self.nounce:
-            print "key is not fresh"
+        if nounce != self.key_nounce:
+            print nounce, "not equal to", self.key_nounce
             return
 
         h = SHA.new()
@@ -271,17 +281,17 @@ class Conversation:
         privkey = RSA.importKey(keystr)
         cipher = PKCS1_OAEP.new(privkey)
         
-        decrypt_data = cipher.decrypt(data)
+        decrypt_data = cipher.decrypt(data).decode('utf-8')
         symkey = decrypt_data[8:] # ignore user_id
 
         # write the key in the keychain
-        self.manager.write_new_key(self.id)
+        self.manager.write_new_key(self.id, symkey)
 
     def incoming_encrypted_message(self, buffer_msg, owner_str):
         
         key = self.get_symetric_key()
         if key == -1:
-            return
+            return "RECIEVEING MESSAGE...NO KEY"
 
         header = buffer_msg[:9]
         iv = buffer_msg[1:9]
@@ -295,7 +305,7 @@ class Conversation:
         derived_mac = self.generate_cbcmac(header + decoded_msg, key)
 
         if (cbcmac != derived_mac):
-            return
+            return "RECIEVEING MESSAGE...INVALID MAC"
 
         # print message and add it to the list of printed messages
         self.print_message(
@@ -332,10 +342,10 @@ class Conversation:
                 keychain = {}
 
         # if user does not have key yet
-        if self.id not in keychain:
-            return -1
+        if keychain.has_key(str(self.id)):
+            return keychain[str(self.id)]
         else:
-            return keychain[self.id]
+            return -1
 
     def print_message(self, msg_raw, owner_str):
         '''
