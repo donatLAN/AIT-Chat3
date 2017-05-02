@@ -157,9 +157,6 @@ class ChatManager:
                     keychain = json.load(jsonfile)
                 except ValueError:
                     keychain = {}
-            # # re-initialize keychain
-            # with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
-            #     json.dump({}, jsonfile)
             # re-write kechain with new key
             with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
                 keychain[c_id] = symkey

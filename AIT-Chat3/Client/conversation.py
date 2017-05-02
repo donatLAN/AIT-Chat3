@@ -227,12 +227,17 @@ class Conversation:
             return
 
         type_byte = '2'
-        iv = Random.new().read(8)
-        header = type_byte + iv
+        pad_user_id = "{:<8}".format(self.manager.user_name)
+        iv_ctr = Random.new().read(8)
+        iv_cbc = Random.new().read(4)
+        ad = type_byte + pad_user_id + iv_ctr + iv_cbc
+        ad_length = str(len(ad + msg_raw)).zfill(4)
+        header = ad + ad_length
 
-        ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
+        ctr = Counter.new(128, initial_value=long(iv_ctr.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
-        cbcmac = self.generate_cbcmac(header + msg_raw, key)
+
+        cbcmac = self.generate_cbcmac(header + msg_raw, key, iv_cbc + ad_length)
 
         encoded_msg = base64.encodestring(header + cipher.encrypt(msg_raw) + cbcmac)
         self.manager.post_message_to_conversation(encoded_msg)
@@ -249,9 +254,10 @@ class Conversation:
         user_id = pad_user_id.strip()
 
         nounce = msg_raw[9:17]
-        pad_msg_length = msg_raw[17:25]
 
+        pad_msg_length = msg_raw[17:25]
         msg_length = int(pad_msg_length)
+
         data = msg_raw[25:msg_length]
         signature = msg_raw[msg_length:]
 
@@ -293,16 +299,18 @@ class Conversation:
         if key == -1:
             return "RECIEVEING MESSAGE...NO KEY"
 
-        header = buffer_msg[:9]
-        iv = buffer_msg[1:9]
-        data = buffer_msg[9:-AES.block_size]
+        header = buffer_msg[:25]
+        pad_user_id = buffer_msg[1:9]
+        iv_ctr = buffer_msg[9:17]
+        iv_cbc = buffer_msg[17:25]
+        data = buffer_msg[25:-AES.block_size]
         cbcmac = buffer_msg[-AES.block_size:]
 
-        ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
+        ctr = Counter.new(128, initial_value=long(iv_ctr.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
         decoded_msg = cipher.decrypt(data)
 
-        derived_mac = self.generate_cbcmac(header + decoded_msg, key)
+        derived_mac = self.generate_cbcmac(header + decoded_msg, key, iv_cbc)
 
         if (cbcmac != derived_mac):
             return "RECIEVEING MESSAGE...INVALID MAC"
@@ -313,17 +321,13 @@ class Conversation:
             owner_str=owner_str
         )
 
-    def generate_cbcmac(self, msg_raw, key):
+    def generate_cbcmac(self, msg_raw, key, iv):
         # pad msg if needed, padding sheme is x01 x00 ... x00
         plen = AES.block_size - len(msg_raw)%AES.block_size
         if (plen != AES.block_size):
             msg_raw += chr(1)
             if (plen > 1):
                 msg_raw += chr(0)*(plen-1)
-
-        # initialize all 0 iv
-        # TODO make iv nounce|len(header|message)
-        iv = chr(0)*AES.block_size
 
         # create AES cipher object
         cipher = AES.new(key, AES.MODE_CBC, iv)
