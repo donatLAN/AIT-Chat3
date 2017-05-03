@@ -192,7 +192,6 @@ class Conversation:
         # get the symetric key and publicly encrypt
         symkey = self.get_symetric_key()
         if symkey == -1:
-            print "does not have symkey"
             return
         pad_current_user = "{:<8}".format(self.manager.user_name)
         data = (pad_current_user + symkey).encode('utf-8')
@@ -228,23 +227,22 @@ class Conversation:
 
         type_byte = '2'
         pad_user_id = "{:<8}".format(self.manager.user_name)
-        iv_ctr = Random.new().read(8)
-        iv_cbc = Random.new().read(4)
-        header = type_byte + pad_user_id + iv_ctr + iv_cbc
-        ad_length = str(len(header + msg_raw)).zfill(4)
+        iv = Random.new().read(8)
+        header = type_byte + pad_user_id + iv
+        ad_length = chr(len(header + msg_raw))
+        ad_length = chr(0)*(8 - len(ad_length)) + ad_length
 
-        ctr = Counter.new(128, initial_value=long(iv_ctr.encode('hex'),16))
+        ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
 
         cbcmac = self.generate_cbcmac(header + msg_raw, key,
-            iv_cbc.encode('hex') + ad_length)
+            iv + ad_length)
 
         encoded_msg = base64.encodestring(header + cipher.encrypt(msg_raw) + cbcmac)
         self.manager.post_message_to_conversation(encoded_msg)
 
     def incoming_setup_message(self, msg_raw):
         nounce = msg_raw[1:9]
-        print "recieving", nounce
         pad_user_id = msg_raw[9:]
         self.outgoing_key_exchange(nounce, pad_user_id)        
 
@@ -263,7 +261,7 @@ class Conversation:
 
         # need to check nounces for freshness
         if nounce != self.key_nounce:
-            print nounce, "not equal to", self.key_nounce
+            print nounce, "NOT EQUAL TO", self.key_nounce
             return
 
         h = SHA.new()
@@ -277,7 +275,7 @@ class Conversation:
         verifier = PKCS1_PSS.new(pubkey)
 
         if not verifier.verify(h, signature):
-            print "public signature verification failed"
+            print "PUBLIC SIGNATURE VERIFICATION FAILED"
             return
 
         # retrieve private key
@@ -297,23 +295,23 @@ class Conversation:
         
         key = self.get_symetric_key()
         if key == -1:
-            return "RECIEVEING MESSAGE...NO KEY"
+            return
 
-        header = buffer_msg[:21]
+        header = buffer_msg[:17]
         pad_user_id = buffer_msg[1:9]
-        iv_ctr = buffer_msg[9:17]
-        iv_cbc = buffer_msg[17:21]
-        data = buffer_msg[21:-AES.block_size]
+        iv = buffer_msg[9:17]
+        data = buffer_msg[17:-AES.block_size]
         cbcmac = buffer_msg[-AES.block_size:]
 
-        ctr = Counter.new(128, initial_value=long(iv_ctr.encode('hex'),16))
+        ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
         decoded_msg = cipher.decrypt(data)
 
-        ad_length = str(len(header + decoded_msg)).zfill(4)
+        ad_length = chr(len(header + decoded_msg))
+        ad_length = chr(0)*(8 - len(ad_length)) + ad_length
 
         derived_mac = self.generate_cbcmac(header + decoded_msg, key,
-            iv_cbc.encode('hex') + ad_length)
+            iv + ad_length)
 
         if (cbcmac != derived_mac):
             return "RECIEVEING MESSAGE...INVALID MAC"

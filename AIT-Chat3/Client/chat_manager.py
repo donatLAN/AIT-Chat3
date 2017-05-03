@@ -4,7 +4,9 @@ import json
 from conversation import Conversation
 from message import Message, MessageEncoder
 from time import sleep
-from Crypto.Random import random
+from Crypto import Random
+from Crypto.Protocol.KDF import PBKDF2
+import binascii
 
 from menu import menu
 
@@ -143,7 +145,8 @@ class ChatManager:
             new_conversation_id = self.get_new_conversation_id()
             if new_conversation_id == -1:
                 return
-            symkey = format(random.getrandbits(128), 'x')
+            salt = Random.new().read(16)
+            symkey = PBKDF2(self.password, salt, dkLen = 16, count = 100000).encode('hex')
             self.write_new_key(new_conversation_id, symkey)
             print "Conversation created"
         else:
