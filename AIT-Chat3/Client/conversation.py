@@ -128,6 +128,7 @@ class Conversation:
     def process_incoming_message(self, msg_raw, msg_id, owner_str):
         '''
         Process incoming messages
+
         :param msg_raw: the raw message
         :param msg_id: ID of the message
         :param owner_str: user name of the user who posted the message
@@ -135,34 +136,31 @@ class Conversation:
         :param print_all: is the message part of the conversation history?
         :return: None
         '''
-
-        # process message here
-		# example is base64 decoding, extend this with any crypto processing of your protocol
         buffer_msg = base64.decodestring(msg_raw)
-
         type_byte = buffer_msg[0]
+        
         if type_byte == '0':
             if owner_str == self.manager.user_name:
                 return
-            print "RECIEVEING SETUP MESSAGE: ", owner_str
             self.incoming_setup_message(buffer_msg)
+
         elif type_byte == '1':
             if owner_str == self.manager.user_name:
                 return
-            print "RECIEVEING KEY EXCHANGE: ", owner_str
             self.incoming_key_exchange(buffer_msg)
+
         elif type_byte == '2':
-            print "RECIEVEING ECRYPTED MESSAGE:", owner_str
-            self.incoming_encrypted_message(buffer_msg, owner_str)
+            self.incoming_encrypted_message(buffer_msg, msg_id, owner_str)
+
         else:
             return
 
     def process_outgoing_message(self, msg_raw, originates_from_console=False):
         '''
-        Process an outgoing message before Base64 encoding
+        Process an outgoing message
 
         :param msg_raw: raw message
-        :return: message to be sent to the server
+        :return:
         '''
 
         # if the message has been typed into the console, record it, so it is never printed again during chatting
@@ -176,10 +174,16 @@ class Conversation:
 
         # process outgoing message here
 		# example is base64 encoding, extend this with any crypto processing of your protocol
-        print "SENDING OUTGOING MESSAGE"
         self.outgoing_encrypted_message(msg_raw)
 
     def outgoing_key_exchange(self, nounce, pad_user_id):
+        '''
+        Process the outgoing key exchange
+
+        :param nounce: nounce sent in from the setup message
+        :param pad_user_id: the padded user id of the sender of setup message
+        :return: message to be sent to the server
+        '''
         user_id = pad_user_id.strip()
 
         # get requester's public key
@@ -189,8 +193,8 @@ class Conversation:
         pubkey = RSA.importKey(keystr)
         cipher = PKCS1_OAEP.new(pubkey)
 
-        # get the symetric key and publicly encrypt
-        symkey = self.get_symetric_key()
+        # get the symmetric key and publicly encrypt
+        symkey = self.get_symmetric_key()
         if symkey == -1:
             return
         pad_current_user = "{:<8}".format(self.manager.user_name)
@@ -216,19 +220,24 @@ class Conversation:
         user_sig = signer.sign(h)
 
         msg_raw = base64.encodestring(header + pubenc + user_sig)
-        print "PROCESSING KEY EXCHANGE: ", header
         self.manager.post_message_to_conversation(msg_raw)
 
     def outgoing_encrypted_message(self, msg_raw):
-        
-        key = self.get_symetric_key()
+        '''
+        Encrypting an outgoing message before Base64 encoding
+
+        :param msg_raw: raw message
+        :return: message to be sent to the server
+        '''
+        key = self.get_symmetric_key()
         if key == -1:
             return
 
         type_byte = '2'
         pad_user_id = "{:<8}".format(self.manager.user_name)
+        seq_num = str(self.get_last_message_id() + 1).zfill(8)
         iv = Random.new().read(8)
-        header = type_byte + pad_user_id + iv
+        header = type_byte + pad_user_id + seq_num + iv
         ad_length = chr(len(header + msg_raw))
         ad_length = chr(0)*(8 - len(ad_length)) + ad_length
 
@@ -242,11 +251,24 @@ class Conversation:
         self.manager.post_message_to_conversation(encoded_msg)
 
     def incoming_setup_message(self, msg_raw):
+        '''
+        Process an incoming setup message and passes info to
+        the outgoing_key_exchange method
+
+        :param msg_raw: raw message
+        :return:
+        '''
         nounce = msg_raw[1:9]
         pad_user_id = msg_raw[9:]
         self.outgoing_key_exchange(nounce, pad_user_id)        
 
     def incoming_key_exchange(self, msg_raw):
+        '''
+        Process an incoming key exchange to get the symmetric key
+
+        :param msg_raw: raw message
+        :return:
+        '''
         # process header
         pad_user_id = msg_raw[1:9]
         user_id = pad_user_id.strip()
@@ -259,9 +281,8 @@ class Conversation:
         data = msg_raw[25:msg_length]
         signature = msg_raw[msg_length:]
 
-        # need to check nounces for freshness
+        # checking nounces for freshness
         if nounce != self.key_nounce:
-            print nounce, "NOT EQUAL TO", self.key_nounce
             return
 
         h = SHA.new()
@@ -275,7 +296,6 @@ class Conversation:
         verifier = PKCS1_PSS.new(pubkey)
 
         if not verifier.verify(h, signature):
-            print "PUBLIC SIGNATURE VERIFICATION FAILED"
             return
 
         # retrieve private key
@@ -291,17 +311,30 @@ class Conversation:
         # write the key in the keychain
         self.manager.write_new_key(self.id, symkey)
 
-    def incoming_encrypted_message(self, buffer_msg, owner_str):
-        
-        key = self.get_symetric_key()
+    def incoming_encrypted_message(self, buffer_msg, msg_id, owner_str):
+        '''
+        Process an incoming encrypted message and prints valid messages
+
+        :param buffer_msg: message to be processed
+        :param msg_id: ID of the message
+        :param owner_str: user_id of the sender
+        :return:
+        '''
+        key = self.get_symmetric_key()
         if key == -1:
             return
 
-        header = buffer_msg[:17]
+        header = buffer_msg[:25]
         pad_user_id = buffer_msg[1:9]
-        iv = buffer_msg[9:17]
-        data = buffer_msg[17:-AES.block_size]
+        seq_num = buffer_msg[9:17]
+        iv = buffer_msg[17:25]
+        data = buffer_msg[25:-AES.block_size]
         cbcmac = buffer_msg[-AES.block_size:]
+
+        # check for replay attacks
+        int_seq_num = int(seq_num)
+        if msg_id > seq_num:
+            return
 
         ctr = Counter.new(128, initial_value=long(iv.encode('hex'),16))
         cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
@@ -314,7 +347,7 @@ class Conversation:
             iv + ad_length)
 
         if (cbcmac != derived_mac):
-            return "RECIEVEING MESSAGE...INVALID MAC"
+            return
 
         # print message and add it to the list of printed messages
         self.print_message(
@@ -323,6 +356,14 @@ class Conversation:
         )
 
     def generate_cbcmac(self, msg_raw, key, iv):
+        '''
+        Helper function for generating a cbcmac
+
+        :param msg_raw: raw message
+        :param key: symmetric key for applying the cbcmac
+        :param iv: the initial vector for cbcmac
+        :return: the cbcmac generated
+        '''
         # pad msg if needed, padding sheme is x01 x00 ... x00
         plen = AES.block_size - len(msg_raw)%AES.block_size
         if (plen != AES.block_size):
@@ -339,7 +380,12 @@ class Conversation:
 
         return comp_mac
 
-    def get_symetric_key(self):
+    def get_symmetric_key(self):
+        '''
+        Retrives the symmetric key for the conversation from
+        the user's keychain file
+        :return: the symmetric key for the conversation
+        '''
         with open('users/' + self.manager.user_name + '/keychain.txt', "r") as jsonfile:
             try:
                 keychain = json.load(jsonfile)

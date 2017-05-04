@@ -142,6 +142,7 @@ class ChatManager:
             except urllib2.URLError as e:
                 print "Unable to create conversation, reason:", e.message
                 return
+            # begin generating and placing symmetric key in file of creator
             new_conversation_id = self.get_new_conversation_id()
             if new_conversation_id == -1:
                 return
@@ -154,16 +155,22 @@ class ChatManager:
             state = INIT
 
     def write_new_key(self, c_id, symkey):
+        '''
+        Writes the new key to the current user's file
+        :param c_id: conversation ID
+        :param symkey: symmetric key to write
+        :return:
+        '''
         # read exisitng keychain
-            with open("users/" + self.user_name + "/keychain.txt", "r") as jsonfile:
-                try:
-                    keychain = json.load(jsonfile)
-                except ValueError:
-                    keychain = {}
-            # re-write kechain with new key
-            with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
-                keychain[c_id] = symkey
-                json.dump(keychain, jsonfile)
+        with open("users/" + self.user_name + "/keychain.txt", "r") as jsonfile:
+            try:
+                keychain = json.load(jsonfile)
+            except ValueError:
+                keychain = {}
+        # re-write kechain with new key
+        with open("users/" + self.user_name + "/keychain.txt", "w") as jsonfile:
+            keychain[c_id] = symkey
+            json.dump(keychain, jsonfile)
 
     def get_other_users(self):
         '''
